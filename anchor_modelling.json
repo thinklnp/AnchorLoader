@@ -5,25 +5,28 @@
 	},
 
 "connections":
-	[{"name":"conn_a",
-	  "type":"anchor_connection",
-	  "scheme":"AM",
-		"conn_str":"..."},
-	 {"name":"conn_erp",
-	  "type":"source_connection",
-	  "conn_str":"..."}
-		],
+  	{"anchor_connection":
+    	{"scheme":"AM",
+		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=True;"},
+	"source_connections":
+		[{"name":"conn_erp",
+		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=True;"}
+		]
+	},
 
 "source_objects":
 	[{"name":"order",
+	  "connection":"conn_erp",
 	  "source_table":"Orders.WbUser",
 	  "delta_field":"rv",
 	  "parallel_field":"order_id"},
 	  {"name":"shk",
+	  "connection":"conn_erp",
 	  "source_table":"Products.SHK",
 	  "delta_field":"rv",
 	  "parallel_field":"shk_id"},
 	  {"name":"order_detail",
+	  "connection":"conn_erp",
 	  "source_table":"Orders.OrderDetail",
 	  "delta_field":"rv",
 	  "parallel_field":"rid"}
@@ -32,7 +35,6 @@
 "objects":[
 	{"name":"order",
 	 "type":"anchor",
-	 "column_name":"order_id",
 	 "column_type":"INT",
 	 "source":{"name":"order","column":"order_id"}
 	 },
@@ -45,7 +47,6 @@
 	 },
 	 {"name":"shk",
 	 "type":"anchor",
-	 "column_name":"shk_id",
 	 "column_type":"BIGINT",
 	 "source":{"name":"shk","column":"shk_id"}
 	 },
