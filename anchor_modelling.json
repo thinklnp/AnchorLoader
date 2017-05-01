@@ -1,0 +1,60 @@
+{
+"preferences":
+	{"historicalDtType":"DATETIME2",
+	 "historicalDtName":"changeDt"
+	},
+
+"connections":
+	[{"name":"conn_a",
+	  "type":"anchor_connection",
+	  "scheme":"AM",
+		"conn_str":"..."},
+	 {"name":"conn_erp",
+	  "type":"source_connection",
+	  "conn_str":"..."}
+		],
+
+"source_objects":
+	[{"name":"order",
+	  "source_table":"Orders.WbUser",
+	  "delta_field":"rv",
+	  "parallel_field":"order_id"},
+	  {"name":"shk",
+	  "source_table":"Products.SHK",
+	  "delta_field":"rv",
+	  "parallel_field":"shk_id"},
+	  {"name":"order_detail",
+	  "source_table":"Orders.OrderDetail",
+	  "delta_field":"rv",
+	  "parallel_field":"rid"}
+	],
+
+"objects":[
+	{"name":"order",
+	 "type":"anchor",
+	 "column_name":"order_id",
+	 "column_type":"INT",
+	 "source":{"name":"order","column":"order_id"}
+	 },
+	{"name":"create_dt",
+	 "type":"attribute",
+	 "anchor":"order",
+	 "column_name":"create_dt",
+	 "column_type":"DATETIME2",
+	 "source":{"name":"order","column":"create_dt"}
+	 },
+	 {"name":"shk",
+	 "type":"anchor",
+	 "column_name":"shk_id",
+	 "column_type":"BIGINT",
+	 "source":{"name":"shk","column":"shk_id"}
+	 },
+	 {"name":"shk_order",
+	 "type":"historical_tie",
+	 "anchors_many" :["order","shk"],
+	 "source":{"name":"order_detail","columns_many":["order_id","shk_id"]}
+	 }
+]
+}		
+		
+		
