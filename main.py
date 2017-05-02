@@ -34,6 +34,16 @@ def create_db(conn, f):
                                     o["column_name"]: o["column_type"],
                                     "met_id": "INT"
                                 }})
+        elif o["type"] == "historical_attribute":
+            a = [t_o for t_o in f["objects"] and t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
+            create_table(conn, {"name": a["name"] + o["name"],
+                                "columns": {
+                                    a["name"] + "_id": a["column_type"],
+                                    o["column_name"]: o["column_type"],
+                                    "changedDT": "DATETIME2",
+                                    "met_id": "INT"
+                                }})
+
 
 
 def main():
@@ -43,10 +53,5 @@ def main():
     create_db(conn_a, f)
 
 
-
-
-
 if __name__ == "__main__":
     main()
-
-    
