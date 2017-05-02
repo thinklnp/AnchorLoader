@@ -42,19 +42,19 @@
 	 "source_name":"order",
      "source_column":"create_dt"
 	 },
-	 {"name":"shk",
+    {"name":"shk",
 	 "type":"anchor",
 	 "column_type":"BIGINT",
 	 "source_name":"shk",
      "source_column":"shk_id"
 	 },
-	 {"name":"shk_order",
+    {"name":"shk_order",
 	 "type":"historical_tie",
 	 "anchors_many" :["order","shk"],
 	 "source_name":"order_detail",
      "source_columns_many":["order_id","shk_id"]
 	 }
-]
+  ]
 }		
 		
 		
