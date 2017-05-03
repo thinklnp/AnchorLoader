@@ -7,10 +7,10 @@
 "connections":
   	{"anchor_connection":
     	{"scheme":"AM",
-		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=True;"},
+		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=yes;"},
 	"source_connections":
 		[{"name":"conn_erp",
-		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=True;"}
+		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=localhost;DATABASE=test;Trusted_Connection=yes;"}
 		]
 	},
 

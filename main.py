@@ -37,7 +37,8 @@ def create_db(conn, f):
 
 
 def main():
-    f = json.load("anchor_modelling.json")
+    with open("anchor_modelling.json") as f_file:
+        f = json.load(f_file)
     conn_a = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
     conn_a.schema = f["connections"]["anchor_connection"]["schema"]
     create_db(conn_a, f)
