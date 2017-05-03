@@ -51,9 +51,11 @@
 	 },
     {"name":"shk_order",
 	 "type":"historical_tie",
-	 "anchors_many" :["orders","shk"],
 	 "source_name":"order_detail",
-     "source_columns_many":["order_id","shk_id"]
+     "columns":[
+       {"type":"anchor_pk","name":"orders","source_column":"order_id"},
+       {"type":"anchor_pk","name":"shk","source_column":"shk_id"}
+     ]
 	 }
   ]
 }		

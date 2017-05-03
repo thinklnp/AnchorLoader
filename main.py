@@ -8,6 +8,8 @@ def create_table(conn, t):
         create_script = "CREATE TABLE "
         create_script += conn["schema"] + "." + t["name"] + " ( "
         create_script += ", ".join([c_n + " " + c_t for c_n, c_t in t["columns"].items()])
+        if t["pk"]:
+            create_script += ", PRIMARY KEY (" + ", ".join(t["pk"]) + ")"
         create_script += ")"
         crsr.execute(create_script)
         crsr.commit()
@@ -37,25 +39,72 @@ def create_db(conn, f):
                                     o["name"] + "_id": o["column_type"] + " NOT NULL PRIMARY KEY",
                                     "met_id": "INT NOT NULL"
                                 }})
+        elif o["type"] == "knot":
+            create_table(conn, {"name": o["name"],
+                                "columns": {
+                                    o["name"] + "_id": o["column_id_type"] + " NOT NULL PRIMARY KEY",
+                                    o["name"] + "_value": o["column_type"] + " NOT NULL",
+                                    "met_id": " INT NOT NULL"
+                                }})
         elif o["type"] == "attribute":
             a = [t_o for t_o in f["objects"] if t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
+            cs = {}
+            cs.update({a["name"]+"_id": a["column_type"] + " NOT NULL PRIMARY KEY REFERENCES "
+                       + conn["schema"] + "." + a["name"] + "(" + a["name"] + "_id) "})
+            if a["knot"]:
+                k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
+                cs.update({k["name"] + "_id": k["column_type"] + " NOT NULL REFERENCES "
+                          + conn["schema"] + "." + k["name"] + "(" + k["name"] + "_id) "})
+            else:
+                cs.update({o["column_name"]: o["column_type"] + " NOT NULL"})
+            cs.update({"met_id": "INT NOT NULL"})
             create_table(conn, {"name": a["name"] + "_" + o["name"],
-                                "columns":{
-                                    a["name"]+"_id": a["column_type"] + " NOT NULL PRIMARY KEY REFERENCES "
-                                    + conn["schema"] + "." + a["name"] + "(" + a["name"] + "_id) ",
-                                    o["column_name"]: o["column_type"] + " NOT NULL",
-                                    "met_id": "INT NOT NULL"
-                                }})
+                                "columns": cs
+                                })
         elif o["type"] == "historical_attribute":
             a = [t_o for t_o in f["objects"] and t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
-            create_table(conn, {"name": a["name"] + o["name"],
-                                "columns": {
-                                    a["name"] + "_id": a["column_type"] + " NOT NULL PRIMARY KEY REFERENCES "
-                                    + a["name"] + "(" + a["name"] + "_id) ",
-                                    o["column_name"]: o["column_type"] + " NOt NULL",
-                                    "changedDT": "DATETIME2 NOT NULL DEFAULT GETDATE()",
-                                    "met_id": "INT NOT NULL"
-                                }})
+            cs = {}
+            cs.update({a["name"]+"_id": a["column_type"] + " NOT NULL PRIMARY KEY REFERENCES "
+                       + conn["schema"] + "." + a["name"] + "(" + a["name"] + "_id) "})
+            if a["knot"]:
+                k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
+                cs.update({k["name"] + "_id": k["column_type"] + " NOT NULL REFERENCES "
+                          + conn["schema"] + "." + k["name"] + "(" + k["name"] + "_id) "})
+            else:
+                cs.update({o["column_name"]: o["column_type"] + " NOT NULL"})
+            cs.update({"changedDt": "DATETIME2 NOT NULL DEFAULT GETDATE()"})
+            cs.update({"met_id": "INT NOT NULL"})
+            create_table(conn, {"name": a["name"] + "_" + o["name"],
+                                "columns": cs,
+                                "pk": [a["name"] + "_id", "changedDt"]
+                                })
+        elif o["type"] == "tie":
+            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot"}
+            cs = {}
+            for c in o["columns"]:
+                a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
+                cs.update({c["name"] + "_id":
+                           a["column_type"] + " NOT NULL REFERENCES "
+                           + conn["schema"] + "." + a["name"] + "(" + a["name"] + "_id) "})
+                cs.update({"met_id": "INT NOT NULL"})
+            create_table(conn, {"name": o["name"],
+                                "columns": cs,
+                                "pk": [c["name"] + "_id" for c in o["columns"] if c["type"] == "anchor_pk"]})
+        elif o["type"] == "historical_tie":
+            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot"}
+            cs = {}
+            for c in o["columns"]:
+                a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
+                cs.update({a["name"] + "_id":
+                           a["column_type"] + " NOT NULL REFERENCES "
+                           + conn["schema"] + "." + a["name"] + "(" + a["name"] + "_id) "})
+                cs.update({"met_id": "INT NOT NULL"}),
+                cs.update({"changedDt": "DATETIME2 NOT NULL DEFAULT GETDATE()"})
+            create_table(conn, {"name": o["name"],
+                                "columns": cs,
+                                "pk": [c["name"] + "_id" for c in o["columns"]
+                                       if c["type"] == "anchor_pk"].append("changedDt")
+                                })
 
 
 def main():
