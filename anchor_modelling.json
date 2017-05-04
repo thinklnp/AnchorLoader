@@ -5,9 +5,7 @@
 		 "database":"Leftovers",
 		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=alborz;DATABASE=Leftovers;Trusted_Connection=yes;"},
 	"source_connections":
-		[{"name":"conn_erp",
-		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=omega;DATABASE=WBR_ERP;Trusted_Connection=yes;"}
-		]
+		{"conn_erp":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=omega;DATABASE=WBR_ERP;Trusted_Connection=yes;"}
 	},
 
 "source_objects":
