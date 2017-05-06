@@ -79,7 +79,7 @@ def create_db(conn, f):
                                 "pk": [a["name"] + "_id", "changedDt"]
                                 })
         elif o["type"] == "tie":
-            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot"}
+            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot", "knot_pk": "knot"}
             cs = {}
             for c in o["columns"]:
                 a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
@@ -91,7 +91,7 @@ def create_db(conn, f):
                                 "columns": cs,
                                 "pk": [c["name"] + "_id" for c in o["columns"] if c["type"] == "anchor_pk"]})
         elif o["type"] == "historical_tie":
-            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot"}
+            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot", "knot_pk": "knot"}
             cs = {}
             for c in o["columns"]:
                 a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
@@ -115,10 +115,64 @@ def get_meta(conn):
     return met_id
 
 
-def get_rv(s, conn):
-    crsr = conn["connection"].cursor()
-    crsr.execute("SELECT MAX({0}) rv FROM {1}_{0}".format(s["delta_field"],s["name"]))
-    return crsr.fetchone().rv
+class AM_Object(object):
+    def __init__(self, o, f):
+        self.o = o
+        self.type = o["type"]
+        self.connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
+
+        self.sort_order
+
+    def create(self):
+        pass
+
+    def init_load(self):
+        pass
+
+    def add(self, r):
+        pass
+
+    def commit_load(self):
+        pass
+
+
+class Source(object):
+    def __init__(self, s, f):
+        self.s = s
+        self.name = s["name"]
+        self.connection = pyodbc.connect(f["connections"]["source_connections"][s["connection"]])
+        self.anchor_connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
+        self.source_columns = set()
+        self.target_objects = []
+        for o in [fo for fo in f["objects"] if fo["source_name"] == s["name"]]:
+            for c in o["columns"]:
+                self.source_columns.add(c["source_column"])
+            self.source_columns.add(o["source_column"])
+            self.target_objects.append(AM_Object(o, f))
+        self.target_objects.sort(key=lambda x: x.sort_order)
+
+    def get_rv(self):
+        crsr = self.anchor_connection.cursor()
+        crsr.execute("SELECT MAX({0}) rv FROM {1}_{0}".format(self.s["delta_field"],self.s["name"]))
+        return crsr.fetchone().rv
+
+    def load_source(self):
+        curs = self.connection.cursor()
+        curs.execute(
+            "SELECT TOP {cnt} {clmns} FROM {src} WHERE rv > CAST({m_rv} AS BINARY(8)) "
+                .format(cnt=10000, clmns=", ".join([c for c in self.source_columns])
+                        , src=self.s["source_table"], m_rv=self.get_rv))
+        map(lambda x: x.init_load(), self.target_objects)
+        for r in curs:
+            map(lambda x: x.add(r), self.target_objects)
+        ao, bo = [], []
+        for t in self.target_objects:
+            if t.sort_order == 1:
+                ao.append(t)
+            else:
+                bo.append(t)
+        map(lambda x: x.commit_load, ao)
+        map(lambda x: x.commit_load, bo)
 
 
 def load_source(s, conn_a, f, rv, met_id, cnt = 10000, par_id = None):
@@ -129,9 +183,111 @@ def load_source(s, conn_a, f, rv, met_id, cnt = 10000, par_id = None):
         columns.add(o["source_column"])
     curs = pyodbc.connect(f["connections"]["source_connections"][s["connection"]]).cursor()
     curs.execute(
-        "SELECT TOP {cnt} {clmns} FROM {src} WHERE rv > CAST({m_rv} "
+        "SELECT TOP {cnt} {clmns} FROM {src} WHERE rv > CAST({m_rv} AS BINARY(8)) "
         .format(cnt=cnt, clmns=", ".join([c for c in columns]), src=s["source_table"], m_rv=rv))
     rows = curs.fetchall()
+    load_anchors()
+        '''
+            CREATE TABLE #tmp_anchor (anchor_id)
+            INSERT INTO #tmp_anchor
+                VALUES (),(),(),()
+            ...
+            MERGE anchor t USING (SELECT DISTINCT anchor_id FROM #temp_anchors) s ON s.anchor_id = t.anchor_id
+            WHEN NOT MATCHED THEN INSERT(anchor_Id) VALUES(s.anchor_id)
+        '''
+    load_knots()
+        '''
+            CREATE TABLE #tmp_knots (knot_val)
+            INSERT INTO #tmp_knots
+                VALUES (), (), (), ()
+            ...
+            MERGE knot t USING (SELECT DISTINCT knot_val FROM #temp_knot) s OM t.knot_val = s.knot_val
+            WHEN NOT MATCHED THEN INSERT (knot_val) VALUES(s.knot_val)
+        '''
+    load_attributes()
+        '''
+            CREATE TABLE #tmp_attributes (anchor_id, attribute)
+            INSERT INTO #tmp_attributes
+                VALUES (,), (,), (,), (,)
+            ...
+            MERGE attribute t USING (SELECT DISTINCT anchor_id, attribute) s ON s.anchor_id = t.anchor_id
+            WHEN NOT MATCHED THEN INSERT (anchor_id,attribute) VALUES (s.anchor_id, s.attribute)
+            WHEN MATCHED THEN UPDATE SET attribute = s.attribute
+        '''
+    load_historical_attributes()
+        '''
+            CREATE TABLE #tmp_attributes (anchor_id, attribute)
+            INSERT INTO #tmp_attributes
+                VALUES (,), (,), (,), (,)
+            ...
+            MERGE attribute t USING (SELECT DISTINCT anchor_id, attribute) s ON s.anchor_id = t.anchor_id AND s.attribute = t.attribute
+            WHEN NOT MATCHED THEN INSERT (anchor_id,attribute) VALUES (s.anchor_id, s.attribute)
+        '''
+    load_knotted_attributes()
+        '''
+            CREATE TABLE #tmp_attributes (anchor_id, attribute)
+            INSERT INTO #tmp_attributes  (anchor_id, attribute)
+                VALUES (,), (,), (,), (,)
+            ...
+
+            MERGE attribute t USING
+                            (SELECT DISTINCT anchor_id, attribute) x
+                             JOIN knot k ON k.knot_val = x.attribute
+                        s ON s.anchor_id = t.anchor_id
+            WHEN NOT MATCHED THEN INSERT (anchor_id,knot_id) VALUES (x.anchor_id, k.knot_id)
+            WHEN MATCHED THEN UPDATE SET knot_id = k.knot_id
+        '''
+    load_historical_knotted_attributes()
+        '''
+            CREATE TABLE #tmp_attributes (anchor_id, attribute)
+            INSERT INTO #tmp_attributes  (anchor_id, attribute)
+                VALUES (,), (,), (,), (,)
+            ...
+
+            MERGE attribute t USING
+                            (SELECT DISTINCT anchor_id, attribute) x
+                             JOIN knot k ON k.knot_val = x.attribute
+                        s ON s.anchor_id = t.anchor_id AND s.knot_id = k.knot_id
+            WHEN NOT MATCHED THEN INSERT (anchor_id,knot_id) VALUES (x.anchor_id, k.knot_id)
+        '''
+    load_ties()
+        '''
+            CREATE TABLE #tmp_tie (anchor1_id, anchor2_id..., knot1, knot2 ...)
+            INSERT INTO #tmp_attributes  (anchor1_id, anchor2_id..., knot1, knot2 ...)
+                VALUES (,..), (,..), (,..), (,..)
+            ...
+
+            MERGE tie t USING
+                            (SELECT DISTINCT anchor1_id, anchor2_id,...
+                                    ,knot1 ,knot2 ..) x
+                             JOIN knot1 k1 ON k1.knot_val = x.knot1
+                             JOIN knot2 k2 ON k2.knot_val = x.knot2
+                             ...
+                        s ON s.anchor1_id = t.anchor1_id AND s.anchor2_id = t.acnhor2_id ...(only pks)
+            WHEN NOT MATCHED THEN INSERT (anchor1_id, anchor2_id..., knot1_id, knot2_id ...)
+                                VALUES (x.anchor1_id, x.anchor2_id..., k1.knot_id, k2.knot_id ...)
+            WHEN MATCHED THEN UPDATE
+                SET knot1_id = k1.knot_id
+                    knot2_id = k2.knot_id
+                    ...
+        '''
+    load_historical_ties()
+        '''
+            CREATE TABLE #tmp_tie (anchor1_id, anchor2_id..., knot1, knot2 ...)
+            INSERT INTO #tmp_attributes  (anchor1_id, anchor2_id..., knot1, knot2 ...)
+                VALUES (,..), (,..), (,..), (,..)
+            ...
+
+            MERGE tie t USING
+                            (SELECT DISTINCT anchor1_id, anchor2_id,...
+                                    ,knot1 ,knot2 ..) x
+                             JOIN knot1 k1 ON k1.knot_val = x.knot1
+                             JOIN knot2 k2 ON k2.knot_val = x.knot2
+                             ...
+                        s ON s.anchor1_id = t.anchor1_id AND s.anchor2_id = t.acnhor2_id ...(all)
+            WHEN NOT MATCHED THEN INSERT (anchor1_id, anchor2_id..., knot1_id, knot2_id ...)
+                                VALUES (x.anchor1_id, x.anchor2_id..., k1.knot_id, k2.knot_id ...)
+        '''
     pass
 
 
