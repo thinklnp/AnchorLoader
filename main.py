@@ -118,22 +118,166 @@ def get_meta(conn):
 class AM_Object(object):
     def __init__(self, o, f):
         self.o = o
-        self.type = o["type"]
+        self.f = f
+        self.name = o["name"]
+        self.data = []
+        self.schema = f["connections"]["anchor_connection"]["conn_str"]["schema"]
+        self.catalog = f["connections"]["anchor_connection"]["conn_str"]["schema"]["database"]
         self.connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
-
-        self.sort_order
+        self.pk = []
+        self.columns = {}
+        self.sort_order = None
 
     def create(self):
-        pass
+        crsr = self.connection.cursor()
+        if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
+            crsr.execute( "CREATE TABLE {scm}.{tbl} ( ".format(scm=self.schema, tbl=self.name)
+                + ", ".join([c_n + " " + c_t for c_n, c_t in self.columns.items()])
+                + "" if self.pk else ", PRIMARY KEY (" + ", ".join(self.pk) + ")"
+                + " ) ")
+            crsr.commit()
 
     def init_load(self):
-        pass
+        self.data = []
 
     def add(self, r):
         pass
 
     def commit_load(self):
         pass
+
+
+def get_am_object(obj, fl):
+    class Anchor(AM_Object):
+        def __init__(self, o, f):
+            super().__init__(o, f)
+            self.sort_order = 1
+            self.columns = {o["name"] + "_id": o["column_type"] + " NOT NULL PRIMARY KEY",
+                            "met_id": "INT NOT NULL"}
+
+        def add(self, r):
+            self.data.append(r[self.o["source_column"]])
+
+        def commit_load(self):
+            curs = self.connection.cursor()
+            curs.execure("CREATE TABLE  #tmp_{0} ({0}_id {1})".format(self.name,self.o["column_type"]))
+            for sv in range(0, len(self.data), 900):
+                curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
+                             + ", ".join(["({0})".format(v) for v in self.data[sv:sv + 900]]))
+            curs.execute("MERGE {0} t USING (SELECT DISTINCT {0}_id FROM #tmp_{0}) s ON s.{0}_id = t.{0}_id" \
+                         "WHEN NOT MATCHED THEN INSERT({0}_Id) VALUES(s.{0}_id)".format(self.name))
+            curs.commit()
+
+    class Knot(AM_Object):
+        def __init__(self, o, f):
+            super().__init__(o, f)
+            self.sort_order = 1
+            self.columns = {o["name"] + "_id": o["column_id_type"] + " NOT NULL PRIMARY KEY",
+                            o["name"] + "_value": o["column_type"] + " NOT NULL",
+                            "met_id": " INT NOT NULL"}
+
+        def add(self, r):
+            self.data.append(r)  # Не row а значение из attribute или tie
+
+        def commit_load(self):
+            curs = self.connection.cursor()
+            curs.execure("CREATE TABLE  #tmp_{0} ({0}_value {1})".format(self.name, self.o["column_type"]))
+            for sv in range(0, len(self.data), 900):
+                curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
+                             + ", ".join(["({0})".format(v) for v in self.data[sv:sv + 900]]))
+            curs.execute("MERGE {0} t USING (SELECT DISTINCT {0}_value FROM #tmp_{0}) s ON s.{0}_value = t.{0}_value" \
+                         "WHEN NOT MATCHED THEN INSERT({0}_value) VALUES(s.{0}_value)".format(self.name))
+            curs.commit()
+
+    class Attribute(AM_Object):
+        def __init__(self, o, f, hist=False):
+            super().__init__(o, f)
+            self.sort_order = 2
+            self.historical = hist
+            #TO_DO добавить закидывание строк в кноты
+            self.a = [t_o for t_o in f["objects"] if t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
+            if o["knot"]:
+                self.k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
+                self.k_obj = Knot(self.k, f)
+                self.column_name = self.k["name"]+ "_value"
+                self.column_type = self.k["column_type"]
+            else:
+                self.k = None
+                self.column_name = self.o["column_name"]
+                self.column_type = self.o["column_type"]
+            self.name = self.a["name"] + "_" + o["name"]
+            cs = {}
+            cs.update({self.a["name"] + "_id": "{col_t} NOT NULL REFERENCES {schema}.{an}({an}_id)"
+                      .format(col_t=self.a["column_type"], schema=self.schema, an=self.a["name"])})
+            if self.k:
+                cs.update({self.k["name"] + "_id": self.k["column_id_type"] + " NOT NULL REFERENCES "
+                                              + self.schema + "." + self.k["name"] + "(" + self.k["name"] + "_id) "})
+            else:
+                cs.update({o["column_name"]: o["column_type"] + " NOT NULL"})
+            if self.historical: cs.update({"changedDt": "DATETIME2 NOT NULL DEFAULT GETDATE()"})
+            cs.update({"met_id": "INT NOT NULL"})
+            self.columns = cs
+            self.pk = [self.a["name"] + "_id", "changedDt"] if self.historical else [self.a["name"] + "_id"]
+
+        def init_load(self):
+            self.data = []
+            self.k_obj.init_load()
+
+        def add(self, r):
+            if self.k: self.k_obj.add(r[self.o["source_column"]])
+            self.data.append((r[self.a["source_column"]], r[self.o["source_column"]]))
+
+        def commit_load(self):
+            if self.k: self.k_obj.commit_load()
+            curs = self.connection.cursor()
+            curs.execure(
+                    "CREATE TABLE  #tmp_{0} ({1}_id {2}, {3} {4})" \
+                    .format(self.name, self.a["name"], self.a["column_type"],
+                            self.column_name, self.column_type ))
+            for sv in range(0, len(self.data), 900):
+                    curs.execute("INSERT INTO #tmp_{0}  VALUES ".format(self.name)
+                             + ", ".join(["({0}, {1})".format(v[0], v[1]) for v in self.data[sv:sv + 900]]))
+            if self.k:
+                curs.execute(("MERGE {0} t USING (SELECT DISTINCT {1}_id, {2} FROM #tmp_{1}) s " +
+                             "  JOIN {3} k ON k.{3}_value = s.{2} ON s.{1}_id = t.{1}_id " +
+                             " WHEN NOT MATCHED THEN INSERT({1}_id, {3}_id) VALUES(s.{1}_id, k.{3}_id)" +
+                             " WHEN MATCHED THEN UPDATE SET {3}_id = k.{3}_id" if not self.historical else ""
+                              ).format(self.name, self.a["name"], self.column_name, self.k["name"]))
+            else:
+                curs.execute(("MERGE {0} t USING (SELECT DISTINCT {1}_id, {2} FROM #tmp_{1}) s ON s.{1}_id = t.{1}_id" +
+                         " WHEN NOT MATCHED THEN INSERT({1}_id, {2}) VALUES(s.{1}_id, {2})" +
+                         " WHEN MATCHED THEN UPDATE SET {2} = s.{2}" if not self.historical else ""
+                              ).format(self.name, self.a["name"], self.o["column_name"]))
+            curs.commit()
+
+#TO_DO причесать Tie не забыть про удаление... Хотя может сейчас и забыть.
+    class Tie(AM_Object):
+        def __init__(self, o, f):
+            super().__init__(o, f)
+            self.sort_order = 2
+            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot", "knot_pk": "knot"}
+            cs = {}
+            for c in o["columns"]:
+                a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
+                cs.update({c["name"] + "_id":
+                               a["column_type"] + " NOT NULL REFERENCES "
+                               + self.schema + "." + a["name"] + "(" + a["name"] + "_id) "})
+                cs.update({"met_id": "INT NOT NULL"})
+            self.columns = cs
+            self.pk = [c["name"] + "_id" for c in o["columns"] if c["type"] == "anchor_pk"]
+
+        def add(self, r):
+            self.data.append([r[c["source_column"]] for c in self.o["columns"]])
+
+        def commit_load(self):
+            pass  # TO_DO dodelyat zagruzku tiev
+
+    if obj["type"] == "anchor": return Anchor(obj, fl)
+    if obj["type"] == "knot": return Knot(obj, fl)
+    if obj["type"] == "tie": return Tie(obj, fl)
+    if obj["type"] == "attribute": return Attribute(obj, fl)
+
+
 
 
 class Source(object):
@@ -148,7 +292,7 @@ class Source(object):
             for c in o["columns"]:
                 self.source_columns.add(c["source_column"])
             self.source_columns.add(o["source_column"])
-            self.target_objects.append(AM_Object(o, f))
+            self.target_objects.append(get_am_object(o, f))
         self.target_objects.sort(key=lambda x: x.sort_order)
 
     def get_rv(self):
@@ -186,24 +330,7 @@ def load_source(s, conn_a, f, rv, met_id, cnt = 10000, par_id = None):
         "SELECT TOP {cnt} {clmns} FROM {src} WHERE rv > CAST({m_rv} AS BINARY(8)) "
         .format(cnt=cnt, clmns=", ".join([c for c in columns]), src=s["source_table"], m_rv=rv))
     rows = curs.fetchall()
-    load_anchors()
-        '''
-            CREATE TABLE #tmp_anchor (anchor_id)
-            INSERT INTO #tmp_anchor
-                VALUES (),(),(),()
-            ...
-            MERGE anchor t USING (SELECT DISTINCT anchor_id FROM #temp_anchors) s ON s.anchor_id = t.anchor_id
-            WHEN NOT MATCHED THEN INSERT(anchor_Id) VALUES(s.anchor_id)
-        '''
-    load_knots()
-        '''
-            CREATE TABLE #tmp_knots (knot_val)
-            INSERT INTO #tmp_knots
-                VALUES (), (), (), ()
-            ...
-            MERGE knot t USING (SELECT DISTINCT knot_val FROM #temp_knot) s OM t.knot_val = s.knot_val
-            WHEN NOT MATCHED THEN INSERT (knot_val) VALUES(s.knot_val)
-        '''
+
     load_attributes()
         '''
             CREATE TABLE #tmp_attributes (anchor_id, attribute)
