@@ -133,7 +133,7 @@ class AM_Object(object):
         if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
             crsr.execute( "CREATE TABLE {scm}.{tbl} ( ".format(scm=self.schema, tbl=self.name)
                 + ", ".join([c_n + " " + c_t for c_n, c_t in self.columns.items()])
-                + "" if self.pk else ", PRIMARY KEY (" + ", ".join(self.pk) + ")"
+                + ", PRIMARY KEY (" + ", ".join(self.pk) + ")" if self.pk else ""
                 + " ) ")
             crsr.commit()
 
@@ -217,7 +217,7 @@ def get_am_object(obj, fl):
             if self.historical: cs.update({"changedDt": "DATETIME2 NOT NULL DEFAULT GETDATE()"})
             cs.update({"met_id": "INT NOT NULL"})
             self.columns = cs
-            self.pk = [self.a["name"] + "_id", "changedDt"] if self.historical else [self.a["name"] + "_id"]
+            self.pk = [self.a["name"] + "_id", "changedDt DESC"] if self.historical else [self.a["name"] + "_id"]
 
         def init_load(self):
             self.data = []
@@ -252,30 +252,64 @@ def get_am_object(obj, fl):
 
 #TO_DO причесать Tie не забыть про удаление... Хотя может сейчас и забыть.
     class Tie(AM_Object):
-        def __init__(self, o, f):
+        def __init__(self, o, f, hist=False):
             super().__init__(o, f)
             self.sort_order = 2
+            self.historical = hist
+            self.name = o["name"]
             cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot", "knot_pk": "knot"}
-            cs = {}
+            cs = []
             for c in o["columns"]:
                 a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
-                cs.update({c["name"] + "_id":
-                               a["column_type"] + " NOT NULL REFERENCES "
-                               + self.schema + "." + a["name"] + "(" + a["name"] + "_id) "})
-                cs.update({"met_id": "INT NOT NULL"})
-            self.columns = cs
+                cs.append((c["name"] + "_id", a["column_type"],
+                           " NOT NULL REFERENCES " + self.schema + "." + a["name"] + "(" + a["name"] + "_id) "))
+                cs.append(("met_id", "INT", "NOT NULL"))
+                if self.historical: cs.append(("changedDt", "DATETIME2",  "NOT NULL DEFAULT GETDATE()"))
+            self.columns = {c_n: c_t + " " + c_k for c_n, c_t, c_k in cs}
+            self.tmp_columns = cs
+            #TO_DO knot_pk to keys
             self.pk = [c["name"] + "_id" for c in o["columns"] if c["type"] == "anchor_pk"]
+            if self.historical: self.pk.append("changedDt DESC")
 
         def add(self, r):
             self.data.append([r[c["source_column"]] for c in self.o["columns"]])
 
         def commit_load(self):
+            #if self.k: self.k_obj.commit_load()
+            curs = self.connection.cursor()
+            curs.execure(
+                    "CREATE TABLE  #tmp_{0} ({1})" \
+                    .format(self.name, ",".join([c_n + " "+ c_t for c_n, c_t, c_k in self.tmp_columns]))  )
+            for sv in range(0, len(self.data), 900):
+                    #TO_DO кавычки для строковых данных!!!
+                    curs.execute("INSERT INTO #tmp_{0}  VALUES ".format(self.name)
+                             + ", ".join(["({0})".format(",".join(v)) for v in self.data[sv:sv + 900]]))
+
+           # if self.k:
+           #     curs.execute(("MERGE {0} t USING (SELECT DISTINCT {1}_id, {2} FROM #tmp_{1}) s " +
+           #                  "  JOIN {3} k ON k.{3}_value = s.{2} ON s.{1}_id = t.{1}_id " +
+           #                  " WHEN NOT MATCHED THEN INSERT({1}_id, {3}_id) VALUES(s.{1}_id, k.{3}_id)" +
+           #                  " WHEN MATCHED THEN UPDATE SET {3}_id = k.{3}_id" if not self.historical else ""
+           #                   ).format(self.name, self.a["name"], self.column_name, self.k["name"]))
+           # else:
+
+                    #TO_DO сделать с knotами
+                    #TO_DO перенести в родителя
+                curs.execute(("MERGE {name} t USING (SELECT DISTINCT {tmp_clmns} FROM #tmp_{name}) s ON {joins}" +
+                         " WHEN NOT MATCHED THEN INSERT({tmp_clmns}) VALUES({s_tmp_clmns})" +
+                         " WHEN MATCHED THEN UPDATE SET {u_tmp_clmns}" if not self.historical else ""
+                              ).format(name=self.name, tmp_clmns=",".join([c[0] for c in self.tmp_columns]),
+                                       s_tmp_clmns=",".join(["s." + c[0] for c in self.tmp_columns]),
+                                       joins=" AND ".join(["t." + c[0] + "=s." + c[0] for c in self.tmp_columns]),
+                                       u_tmp_clmns=",".join([c[0] + "=s." + c[0] for c in self.tmp_columns])))
+            curs.commit()
             pass  # TO_DO dodelyat zagruzku tiev
 
     if obj["type"] == "anchor": return Anchor(obj, fl)
     if obj["type"] == "knot": return Knot(obj, fl)
     if obj["type"] == "tie": return Tie(obj, fl)
     if obj["type"] == "attribute": return Attribute(obj, fl)
+    if obj["type"] == "historical_attribute": return Attribute(obj, fl, True)
 
 
 
