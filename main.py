@@ -114,6 +114,9 @@ def get_meta(conn):
     crsr.commit()
     return met_id
 
+def str2sql(a): return "'" + a.replace("'","''") + "'"
+
+def int2sql(a): return str(a)
 
 class AM_Object(object):
     def __init__(self, o, f):
@@ -125,16 +128,21 @@ class AM_Object(object):
         self.catalog = f["connections"]["anchor_connection"]["conn_str"]["schema"]["database"]
         self.connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
         self.pk = []
-        self.columns = {}
+        self.columns = []
         self.sort_order = None
+        self.historical = False
 
     def create(self):
         crsr = self.connection.cursor()
         if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
-            crsr.execute( "CREATE TABLE {scm}.{tbl} ( ".format(scm=self.schema, tbl=self.name)
-                + ", ".join([c_n + " " + c_t for c_n, c_t in self.columns.items()])
-                + ", PRIMARY KEY (" + ", ".join(self.pk) + ")" if self.pk else ""
-                + " ) ")
+            crsr.execute("CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
+                         .format(scm=self.schema, tbl=self.name,
+                         clmns=", ".join([c["cl_name"] + " " + c["cl_type"] + " NOT NULL " +
+                            " REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"],c["cl_ref_name"] + "_id")
+                                          if "cl_ref_name" in c else "" for c in self.columns])
+                        ,cdt= ", changedDt DATETIME2 NOT NULL DEFAULT GETDATE()" if self.historical else ""
+                        ,pks=", ".join([c["cl_name"] for c in self.pk]) + ", changedDt DESC" if self.historical else "")
+                         )
             crsr.commit()
 
     def init_load(self):
@@ -144,7 +152,31 @@ class AM_Object(object):
         pass
 
     def commit_load(self):
-        pass
+        tmp_cs = [{"cl_name": c["cl_ref_name"] + "_value" if "cl_ref_name" in c else c["cl_name"],
+                   "cl_type": c["cl_ref_type"] if "cl_ref_type" in c else c["cl_type"]} for c in self.columns]
+        curs = self.connection.cursor()
+        curs.execure(
+            "CREATE TABLE  #tmp_{0} ({1})" \
+                .format(self.name, ",".join(["{0} {1}".format(c["cl_name"],c["cl_type"])  for c in self.tmp_cs])))
+        for sv in range(0, len(self.data), 900):
+            curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
+                         + ", ".join(["({0})".format(",".join(v)) for v in self.data[sv:sv + 900]]))
+        if self.k:
+            curs.execute(("MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} " +
+                         # "  JOIN {3} k ON k.{3}_value = s.{2} +
+                          " ON {j_clmns} " +
+                          " WHEN NOT MATCHED THEN INSERT({clmns}) VALUES({s_clmns})"
+                          + " WHEN MATCHED THEN UPDATE SET {m_clmns}" if not self.historical else ""
+                          ).format(name=self.name,
+                            clmns=",".join([c["cl_name"] for c in tmp_cs])),
+                            s_clmns=",".join(["s." + c["cl_name"] for c in tmp_cs]),
+                            ## Если JOIN то не так
+                            m_clmns=",".join([ c["cl_name"] + "= t." + c["cl_name"] for c in self.columns]),
+                            j_clmns=" AND ".join(["s." + c["cl_name"] + " = t." + c["cl_name"] for c in self.columns]),
+                            joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_value = s.{1}_val".format(self.schema, c["cl_ref_name"])
+                                            for c in tmp_cs])
+                         )
+        curs.commit()
 
 
 def get_am_object(obj, fl):
@@ -152,8 +184,8 @@ def get_am_object(obj, fl):
         def __init__(self, o, f):
             super().__init__(o, f)
             self.sort_order = 1
-            self.columns = {o["name"] + "_id": o["column_type"] + " NOT NULL PRIMARY KEY",
-                            "met_id": "INT NOT NULL"}
+            self.columns = [{"cl_name":o["name"] + "_id", "cl_type": o["column_type"]}]
+            self.pk = [o["name"] + "_id"]
 
         def add(self, r):
             self.data.append(r[self.o["source_column"]])
@@ -172,9 +204,11 @@ def get_am_object(obj, fl):
         def __init__(self, o, f):
             super().__init__(o, f)
             self.sort_order = 1
-            self.columns = {o["name"] + "_id": o["column_id_type"] + " NOT NULL PRIMARY KEY",
-                            o["name"] + "_value": o["column_type"] + " NOT NULL",
-                            "met_id": " INT NOT NULL"}
+            self.columns = [{"cl_name": o["name"] + "_id",
+                             "cl_type": o["column_id_type"]},
+                            {"cl_name":  o["name"] + "_value",
+                             "cl_type": o["column_type"]}]
+            self.pk = [o["name"] + "_id"]
 
         def add(self, r):
             self.data.append(r)  # Не row а значение из attribute или tie
@@ -196,7 +230,7 @@ def get_am_object(obj, fl):
             self.historical = hist
             #TO_DO добавить закидывание строк в кноты
             self.a = [t_o for t_o in f["objects"] if t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
-            if o["knot"]:
+            if "knot" in o:
                 self.k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
                 self.k_obj = Knot(self.k, f)
                 self.column_name = self.k["name"]+ "_value"
@@ -206,18 +240,24 @@ def get_am_object(obj, fl):
                 self.column_name = self.o["column_name"]
                 self.column_type = self.o["column_type"]
             self.name = self.a["name"] + "_" + o["name"]
-            cs = {}
-            cs.update({self.a["name"] + "_id": "{col_t} NOT NULL REFERENCES {schema}.{an}({an}_id)"
-                      .format(col_t=self.a["column_type"], schema=self.schema, an=self.a["name"])})
+            self.columns = [{
+                                "cl_name": self.a["name"] + "_id",
+                                "cl_tpye": self.a["column_type"],
+                                "cl_ref_name": self.a["name"]
+                            }]
             if self.k:
-                cs.update({self.k["name"] + "_id": self.k["column_id_type"] + " NOT NULL REFERENCES "
-                                              + self.schema + "." + self.k["name"] + "(" + self.k["name"] + "_id) "})
+                self.columns.append({
+                    "cl_name": self.k["name"] + "_id",
+                    "cl_type": self.k["column_id_type"],
+                    "cl_ref_name": self.k["name"],
+                    "cl_ref_type": self.k["column_type"]
+                })
             else:
-                cs.update({o["column_name"]: o["column_type"] + " NOT NULL"})
-            if self.historical: cs.update({"changedDt": "DATETIME2 NOT NULL DEFAULT GETDATE()"})
-            cs.update({"met_id": "INT NOT NULL"})
-            self.columns = cs
-            self.pk = [self.a["name"] + "_id", "changedDt DESC"] if self.historical else [self.a["name"] + "_id"]
+                self.columns.append({
+                    "cl_name": o["column_name"],
+                    "cl_type": o["column_type"]
+                })
+            self.pk = [self.a["name"] + "_id"]
 
         def init_load(self):
             self.data = []
@@ -261,15 +301,14 @@ def get_am_object(obj, fl):
             cs = []
             for c in o["columns"]:
                 a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
-                cs.append((c["name"] + "_id", a["column_type"],
-                           " NOT NULL REFERENCES " + self.schema + "." + a["name"] + "(" + a["name"] + "_id) "))
-                cs.append(("met_id", "INT", "NOT NULL"))
-                if self.historical: cs.append(("changedDt", "DATETIME2",  "NOT NULL DEFAULT GETDATE()"))
-            self.columns = {c_n: c_t + " " + c_k for c_n, c_t, c_k in cs}
-            self.tmp_columns = cs
+                self.columns.append({
+                    "cl_name": c["name"] + "_id",
+                    "cl_type": a["column_type"],
+                    "cl_ref_name": a["name"],
+                    "cl_ref_type": a["column_type"]
+                })
             #TO_DO knot_pk to keys
             self.pk = [c["name"] + "_id" for c in o["columns"] if c["type"] == "anchor_pk"]
-            if self.historical: self.pk.append("changedDt DESC")
 
         def add(self, r):
             self.data.append([r[c["source_column"]] for c in self.o["columns"]])
