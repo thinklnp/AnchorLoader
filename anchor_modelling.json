@@ -12,7 +12,7 @@
 	[{"name":"order",
 	  "connection":"conn_erp",
 	  "source_table":"Orders.WbUser",
-	  "delta_field":"rv",
+	  "delta_field":"order_id",
 	  "parallel_field":"order_id"},
 	  {"name":"shk",
 	  "connection":"conn_erp",
@@ -39,7 +39,7 @@
 	 "column_name":"create_dt",
 	 "column_type":"DATETIME2",
 	 "source_name":"order",
-     "source_column":"create_dt"
+     "source_column":"order_dt"
 	 },
     {"name":"shk",
 	 "type":"anchor",

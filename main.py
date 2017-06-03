@@ -4,7 +4,7 @@ import json
 
 def get_meta(conn):
     crsr = conn["connection"].cursor()
-    crsr.execute("INSERT INTO {0}.am_meta(dt) VALUES(GETDATE()) SELECT SCOPE_IDENTITY() met_id".format(conn["schema"]))
+    crsr.execute("SET NOCOUNT ON; INSERT INTO {0}.am_meta(dt) VALUES(GETDATE()) SELECT SCOPE_IDENTITY() met_id".format(conn["schema"]))
     met_id = crsr.fetchone().met_id
     crsr.commit()
     return met_id
@@ -35,7 +35,7 @@ class AM_Object(object):
     def create(self):
         crsr = self.connection.cursor()
         if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
-            crsr.execute("CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
+            crsr.execute("SET NOCOUNT ON; CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
                          .format(scm=self.schema, tbl=self.name,
                          clmns=", ".join([c["cl_name"] + " " + c["cl_type"] + " NOT NULL " +
                             " REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"],c["cl_ref_name"] + "_id")
@@ -62,7 +62,7 @@ class AM_Object(object):
             curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
                          + ", ".join(["({0})".format(",".join(to_sql_str(v))) for v in self.data[sv:sv + 900]]))
         if self.k:
-            curs.execute(("MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
+            curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
                 + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
                 + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
                 ).format(name=self.name,
@@ -200,10 +200,11 @@ class Source(object):
         self.name = s["name"]
         self.connection = pyodbc.connect(f["connections"]["source_connections"][s["connection"]])
         self.anchor_connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
+        self.schema = f["connections"]["anchor_connection"]["schema"]
         self.source_columns = set()
         self.target_objects = []
         for o in [fo for fo in f["objects"] if fo["source_name"] == s["name"]]:
-            for c in o["columns"]:
+            for c in o.get("columns",[o]):
                 self.source_columns.add(c["source_column"])
             self.source_columns.add(o["source_column"])
             self.target_objects.append(get_am_object(o, f))
@@ -211,15 +212,15 @@ class Source(object):
 
     def get_rv(self):
         crsr = self.anchor_connection.cursor()
-        crsr.execute("SELECT MAX({0}) rv FROM {1}_{0}".format(self.s["delta_field"],self.s["name"]))
-        return crsr.fetchone().rv
+        crsr.execute("SELECT MAX({0}) rv FROM {2}.{1}_{0}".format(self.s["delta_field"],self.s["name"],self.schema))
+        rows = crsr.fetchone()
+        return rows[0] if rows[0] else 0
 
     def load_source(self, met_id):
         curs = self.connection.cursor()
         curs.execute(
-            "SELECT TOP {cnt} {clmns} FROM {src} WHERE rv > CAST({m_rv} AS BINARY(8)) "
-                .format(cnt=10000, clmns=", ".join([c for c in self.source_columns])
-                        , src=self.s["source_table"], m_rv=self.get_rv))
+            "SELECT TOP {cnt} {clmns} FROM {src} WHERE {d_field} > CAST({m_rv} AS BINARY(8)) ORDER BY {d_field} "
+                .format(cnt=10000, clmns=", ".join([c for c in self.source_columns]), src=self.s["source_table"], m_rv=self.get_rv(), d_field=self.s["delta_field"]))
         map(lambda x: x.init_load(), self.target_objects)
         for r in curs:
             map(lambda x: x.add(r), self.target_objects)
@@ -238,7 +239,7 @@ def create_table(conn, t):
     if not crsr.tables(table=t["name"], schema=conn["schema"], catalog=conn["database"]).fetchone():
         crsr.execute("CREATE TABLE " + conn["schema"] + "." + t["name"] + " ( "
                         + ", ".join([c_n + " " + c_t for c_n, c_t in t["columns"].items()])
-                        + (", PRIMARY KEY (" + ", ".join(t["pk"]) + ")") if "pk" in t else "" + ")")
+                        + (", PRIMARY KEY (" + ", ".join(t["pk"]) + ")" if "pk" in t else "") + ")")
         crsr.commit()
 
 
