@@ -4,7 +4,7 @@ import json
 
 def get_meta(conn):
     crsr = conn["connection"].cursor()
-    crsr.execute("INSERT INTO {0}.am_meta(dt) VALUES(GETDATE()) SELECT @@SCOPE_IDENTITY met_id".format(conn["schema"]))
+    crsr.execute("INSERT INTO {0}.am_meta(dt) VALUES(GETDATE()) SELECT SCOPE_IDENTITY() met_id".format(conn["schema"]))
     met_id = crsr.fetchone().met_id
     crsr.commit()
     return met_id
@@ -24,8 +24,8 @@ class AM_Object(object):
         self.f = f
         self.name = o["name"]
         self.data = []
-        self.schema = f["connections"]["anchor_connection"]["conn_str"]["schema"]
-        self.catalog = f["connections"]["anchor_connection"]["conn_str"]["schema"]["database"]
+        self.schema = f["connections"]["anchor_connection"]["schema"]
+        self.catalog = f["connections"]["anchor_connection"]["database"]
         self.connection = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
         self.columns = []
         self.sort_order = None
@@ -156,7 +156,7 @@ def get_am_object(obj, fl):
             pk_i = 0
             self.k_objs = []
             for c in o["columns"]:
-                a = [x["column_type"] for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
+                a = [x for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
                 cols = {
                         "cl_name": c["name"] + "_id",
                         "cl_type": a["column_type"],
@@ -191,6 +191,7 @@ def get_am_object(obj, fl):
     if obj["type"] == "tie": return Tie(obj, fl)
     if obj["type"] == "attribute": return Attribute(obj, fl)
     if obj["type"] == "historical_attribute": return Attribute(obj, fl, True)
+    if obj["type"] == "historical_tie": return Tie(obj, fl, True)
 
 
 class Source(object):
@@ -265,12 +266,12 @@ def create_db(conn, f):
 def main():
     with open("anchor_modelling.json") as f_file:
         f = json.load(f_file)
-    conn_a = pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"])
-    create_db({"connection": conn_a,
-               "schema": f["connections"]["anchor_connection"]["schema"],
-               "database": f["connections"]["anchor_connection"]["database"]}, f)
-    met_id = get_meta(conn_a)
-    conn_a.close()
+    with pyodbc.connect(f["connections"]["anchor_connection"]["conn_str"]) as cn:
+        conn_a = {"connection": cn,
+                   "schema": f["connections"]["anchor_connection"]["schema"],
+                   "database": f["connections"]["anchor_connection"]["database"]}
+        create_db(conn_a, f)
+        met_id = get_meta(conn_a)
     for s in f["source_objects"]:
         Source(s,f).load_source(met_id)
 
