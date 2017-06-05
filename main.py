@@ -221,17 +221,25 @@ class Source(object):
         curs.execute(
             "SELECT TOP {cnt} {clmns} FROM {src} WHERE {d_field} > CAST({m_rv} AS BINARY(8)) ORDER BY {d_field} "
                 .format(cnt=10000, clmns=", ".join([c for c in self.source_columns]), src=self.s["source_table"], m_rv=self.get_rv(), d_field=self.s["delta_field"]))
-        map(lambda x: x.init_load(), self.target_objects)
+        for x in self.target_objects:
+            x.init_load()
+  #      map(lambda x: x.init_load(), self.target_objects)
         for r in curs:
-            map(lambda x: x.add(r), self.target_objects)
+            for x in self.target_objects:
+                x.add(r)
+  #          map(lambda x: x.add(r), self.target_objects)
         ao, bo = [], []
         for t in self.target_objects:
             if t.sort_order == 1:
                 ao.append(t)
             else:
                 bo.append(t)
-        map(lambda x: x.commit_load(met_id), ao)
-        map(lambda x: x.commit_load(met_id), bo)
+        for x in ao:
+            x.commit_load(met_id)
+        for x in bo:
+            x.commit_load(met_id)
+   #     map(lambda x: x.commit_load(met_id), ao)
+   #     map(lambda x: x.commit_load(met_id), bo)
 
 
 def create_table(conn, t):
