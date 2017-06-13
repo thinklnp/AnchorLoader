@@ -29,9 +29,7 @@
 "objects":[
 	{"name":"orders",
 	 "type":"anchor",
-	 "column_type":"INT",
-	 "source_name":"order",
-     "source_column":"order_id"
+	 "column_type":"INT"
 	 },
 	{"name":"create_dt",
 	 "type":"attribute",
@@ -43,9 +41,7 @@
 	 },
     {"name":"shk",
 	 "type":"anchor",
-	 "column_type":"BIGINT",
-	 "source_name":"shk",
-     "source_column":"shk_id"
+	 "column_type":"BIGINT"
 	 },
     {"name":"shk_order",
 	 "type":"historical_tie",

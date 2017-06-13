@@ -31,6 +31,7 @@ class AM_Object(object):
         self.sort_order = None
         self.historical = False
         self.k = None
+        self.dict2row = {}
 
     def create(self):
         crsr = self.connection.cursor()
@@ -45,8 +46,9 @@ class AM_Object(object):
                          )
             crsr.commit()
 
-    def init_load(self):
+    def init_load(self, curs):
         self.data = []
+        self.dict2row = {e[0]:ne for ne, e in enumerate(curs.description)}
 
     def add(self, r):
         pass
@@ -89,7 +91,7 @@ def get_am_object(obj, fl):
             self.columns = [{"cl_name":o["name"] + "_id", "cl_type": o["column_type"], "cl_pk":0}]
 
         def add(self, r):
-            self.data.append([r[self.o["source_column"]]])
+            self.data.append(r) # Не row а значение из attribute или tie
 
     class Knot(AM_Object):
         def __init__(self, o, f):
@@ -110,6 +112,7 @@ def get_am_object(obj, fl):
             self.sort_order = 2
             self.historical = hist
             self.a = [t_o for t_o in f["objects"] if t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
+            self.a_obj = Anchor(self.a, f)
             if "knot" in o:
                 self.k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
                 self.k_obj = Knot(self.k, f)
@@ -133,16 +136,18 @@ def get_am_object(obj, fl):
                     "cl_type": o["column_type"]
                 })
 
-        def init_load(self):
-            super().init_load()
-            if self.k: self.k_obj.init_load()
+        def init_load(self, curs):
+            super().init_load(curs)
+            if self.k: self.k_obj.init_load(curs)
+            self.a_obj.init_load(curs)
 
         def add(self, r):
-            if self.k: self.k_obj.add(r[self.o["source_column"]])
-            self.data.append([r[self.a["source_column"]], r[self.o["source_column"]]])
+            if self.k: self.k_obj.add(r[self.dict2row[self.o["source_column"]]])
+            self.data.append([r[self.dict2row[self.a["source_column"]]], r[self.dict2row[self.o["source_column"]]]])
 
         def commit_load(self, metadata):
             if self.k: self.k_obj.commit_load(metadata)
+            self.a_obj.commit_load(metadata)
             super().commit_load(metadata)
 
     ##TO_DO причесать Tie не забыть про удаление... Хотя может сейчас и забыть.
@@ -169,21 +174,27 @@ def get_am_object(obj, fl):
                 if c["type"] in ["knot","knot_pk"]:
                     cols.update({"k_obj": Knot([x for x in f["objects"] if x["type"] == "knot" and x["name"] == c["name"]][0],f),
                                  "k_source_column": c["source_column"]})
+                if c["type"] in ["anchor","anchor_pk"]:
+                    cols.update({"a_obj": Anchor([x for x in f["objects"] if x["type"] == "anchor" and x["name"] == c["name"]][0],f),
+                                 "a_source_column": c["source_column"]})
                 self.columns.append(cols)
 
-        def init_load(self):
-            super().init_load()
+        def init_load(self, curs):
+            super().init_load(curs)
             for c in self.columns:
-                if "k_obj" in c: c["k_obj"].init_load()
+                if "k_obj" in c: c["k_obj"].init_load(curs)
+                if "a_obj" in c: c["a_obj"].init_load(curs)
 
         def add(self, r):
-            self.data.append([r[c["source_column"]] for c in self.o["columns"]])
+            self.data.append([r[self.dict2row[c["source_column"]]] for c in self.o["columns"]])
             for c in self.columns:
-                if "k_obj" in c: c["k_obj"].add([r[c["k_source_column"]]])
+                if "k_obj" in c: c["k_obj"].add([r[self.dict2row[c["k_source_column"]]]])
+                if "a_obj" in c: c["a_obj"].add([r[self.dict2row[c["a_source_column"]]]])
 
         def commit_load(self, metadata):
             for c in self.columns:
                 if "k_obj" in c: c["k_obj"].commit_load(metadata)
+                if "a_obj" in c: c["a_obj"].commit_load(metadata)
             super().commit_load(metadata)
 
     if obj["type"] == "anchor": return Anchor(obj, fl)
