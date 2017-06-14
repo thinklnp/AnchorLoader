@@ -214,7 +214,7 @@ class Source(object):
         self.schema = f["connections"]["anchor_connection"]["schema"]
         self.source_columns = set()
         self.target_objects = []
-        for o in [fo for fo in f["objects"] if fo["source_name"] == s["name"]]:
+        for o in [fo for fo in f["objects"] if "source_name" in fo and fo["source_name"] == s["name"]]:
             for c in o.get("columns",[o]):
                 self.source_columns.add(c["source_column"])
             self.source_columns.add(o["source_column"])
@@ -233,7 +233,7 @@ class Source(object):
             "SELECT TOP {cnt} {clmns} FROM {src} WHERE {d_field} > CAST({m_rv} AS BINARY(8)) ORDER BY {d_field} "
                 .format(cnt=10000, clmns=", ".join([c for c in self.source_columns]), src=self.s["source_table"], m_rv=self.get_rv(), d_field=self.s["delta_field"]))
         for x in self.target_objects:
-            x.init_load()
+            x.init_load(curs)
   #      map(lambda x: x.init_load(), self.target_objects)
         for r in curs:
             for x in self.target_objects:

@@ -31,13 +31,13 @@
 	 "type":"anchor",
 	 "column_type":"INT"
 	 },
-	{"name":"create_dt",
-	 "type":"attribute",
-	 "anchor":"orders",
-	 "column_name":"create_dt",
-	 "column_type":"DATETIME2",
-	 "source_name":"order",
-     "source_column":"dt"
+      {"name":"create_dt",
+        "type":"attribute",
+        "anchor":"orders",
+        "column_name":"create_dt",
+        "column_type":"DATETIME2",
+        "source_name":"order",
+        "source_column":"dt"
 	 },
     {"name":"shk",
 	 "type":"anchor",
