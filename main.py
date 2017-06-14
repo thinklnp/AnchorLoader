@@ -1,5 +1,6 @@
 import pyodbc
 import json
+import datetime
 
 
 def get_meta(conn):
@@ -11,11 +12,12 @@ def get_meta(conn):
 
 
 def to_sql_str(a):
-    try:
-        float(a)
-        return str(a)
-    except ValueError:
+    if isinstance(a, str):
         return "'" + a.replace("'", "''") + "'"
+    elif isinstance(a, datetime.datetime):
+        return "'" + a.strftime("%Y-%m-%d %H:%M:%S") + "'"
+    else:
+        return a
 
 
 class AM_Object(object):
@@ -57,12 +59,13 @@ class AM_Object(object):
         tmp_cs = [{"cl_name": c["cl_ref_name"] + "_value" if "cl_ref_name" in c else c["cl_name"],
                    "cl_type": c["cl_ref_type"] if "cl_ref_type" in c else c["cl_type"]} for c in self.columns]
         curs = self.connection.cursor()
-        curs.execure(
+        curs.execute(
             "CREATE TABLE  #tmp_{0} ({1})".format(self.name, ",".join(["{0} {1}".format(c["cl_name"],c["cl_type"])
                                                                        for c in tmp_cs])))
         for sv in range(0, len(self.data), 900):
             curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
-                         + ", ".join(["({0})".format(",".join(to_sql_str(v))) for v in self.data[sv:sv + 900]]))
+                         + ", ".join(["({0})".format(",".join(map(to_sql_str, v))) for v in self.data[sv:sv + 900]]))
+            ##TODO What's th fuck.. where simple load?
         if self.k:
             curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
                 + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
@@ -91,7 +94,7 @@ def get_am_object(obj, fl):
             self.columns = [{"cl_name":o["name"] + "_id", "cl_type": o["column_type"], "cl_pk":0}]
 
         def add(self, r):
-            self.data.append(r) # Не row а значение из attribute или tie
+            self.data.append([r]) # Не row а значение из attribute или tie
 
     class Knot(AM_Object):
         def __init__(self, o, f):
@@ -104,7 +107,7 @@ def get_am_object(obj, fl):
                              "cl_type": o["column_type"]}]
 
         def add(self, r):
-            self.data.append(r)  # Не row а значение из attribute или tie
+            self.data.append([r])  # Не row а значение из attribute или tie
 
     class Attribute(AM_Object):
         def __init__(self, o, f, hist=False):
@@ -143,7 +146,8 @@ def get_am_object(obj, fl):
 
         def add(self, r):
             if self.k: self.k_obj.add(r[self.dict2row[self.o["source_column"]]])
-            self.data.append([r[self.dict2row[self.a["source_column"]]], r[self.dict2row[self.o["source_column"]]]])
+            if self.a_obj: self.a_obj.add(r[self.dict2row[self.o["source_anchor"]]])
+            self.data.append([r[self.dict2row[self.o["source_anchor"]]], r[self.dict2row[self.o["source_column"]]]])
 
         def commit_load(self, metadata):
             if self.k: self.k_obj.commit_load(metadata)
@@ -217,6 +221,7 @@ class Source(object):
         for o in [fo for fo in f["objects"] if "source_name" in fo and fo["source_name"] == s["name"]]:
             for c in o.get("columns",[o]):
                 self.source_columns.add(c["source_column"])
+                if "source_anchor" in c: self.source_columns.add(c["source_anchor"])
             self.source_columns.add(o["source_column"])
             self.target_objects.append(get_am_object(o, f))
         self.target_objects.sort(key=lambda x: x.sort_order)

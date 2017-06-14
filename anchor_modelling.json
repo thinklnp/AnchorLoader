@@ -37,7 +37,8 @@
         "column_name":"create_dt",
         "column_type":"DATETIME2",
         "source_name":"order",
-        "source_column":"dt"
+        "source_column":"dt",
+        "source_anchor":"order_id"
 	 },
     {"name":"shk",
 	 "type":"anchor",
