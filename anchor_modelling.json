@@ -1,57 +1,81 @@
 {
-"connections":
-  	{"anchor_connection":
-    	{"schema":"AM",
-		 "database":"Leftovers",
-		 "conn_str":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=alborz;DATABASE=Leftovers;Trusted_Connection=yes;"},
-	"source_connections":
-		{"conn_erp":"DRIVER={ODBC Driver 11 for SQL Server};SERVER=omega;DATABASE=WBR_ERP;Trusted_Connection=yes;"}
-	},
+  "connections": {
+    "anchor_connection": {
+      "schema": "AM",
+      "database": "Leftovers",
+      "conn_str": "DRIVER={ODBC Driver 11 for SQL Server};SERVER=alborz;DATABASE=Leftovers;Trusted_Connection=yes;"
+    },
+    "source_connections": {
+      "conn_erp": "DRIVER={ODBC Driver 11 for SQL Server};SERVER=omega;DATABASE=WBR_ERP;Trusted_Connection=yes;"
+    }
+  },
+  "source_objects": [
+    {
+      "name": "order",
+      "connection": "conn_erp",
+      "source_table": "Reports.Orders",
+      "delta_field": "id",
+      "parallel_field": "order_id"
+    },
+    {
+      "name": "shk",
+      "connection": "conn_erp",
+      "source_table": "Products.SHK",
+      "delta_field": "rv",
+      "parallel_field": "shk_id"
+    },
+    {
+      "name": "order_detail",
+      "connection": "conn_erp",
+      "source_table": "Orders.OrderDetails",
+      "delta_field": "rv",
+      "parallel_field": "rid"
+    }
+  ],
+  "objects": {
+    "anchors": [
+      {
+        "name": "orders",
+        "column_type": "INT",
+        "source": "order",
+        "source_column": "order_id",
+        "attributes": [
+          {
+            "name": "create_dt",
+            "column_type": "DATETIME2",
+            "historical":"false",
+            "source_column": "dt"
+          }
+        ]
+      },
+      {
+        "name": "shk",
+        "column_type": "BIGINT",
+        "source": "shk",
+        "source_column": "shk_id"
+      }
+    ],
+    "ties": [
+      {
+        "name": "shk_order",
+        "historical": "true",
+        "source_name": "order_detail",
+        "columns": [
+          {
+            "type": "anchor_pk",
+            "name": "orders",
+            "source_column": "order_id"
+          },
+          {
+            "type": "anchor_pk",
+            "name": "shk",
+            "source_column": "shk_id"
+          }
+        ]
+      }
+    ]
+  }
+}
 
-"source_objects":
-	[{"name":"order",
-	  "connection":"conn_erp",
-	  "source_table":"Reports.Orders",
-	  "delta_field":"id",
-	  "parallel_field":"order_id"},
-	  {"name":"shk",
-	  "connection":"conn_erp",
-	  "source_table":"Products.SHK",
-	  "delta_field":"rv",
-	  "parallel_field":"shk_id"},
-	  {"name":"order_detail",
-	  "connection":"conn_erp",
-	  "source_table":"Orders.OrderDetails",
-	  "delta_field":"rv",
-	  "parallel_field":"rid"}
-	],
-
-"objects":[
-	{"name":"orders",
-	 "type":"anchor",
-	 "column_type":"INT"
-	 },
-	{"name":"create_dt",
-	 "type":"attribute",
-	 "anchor":"orders",
-	 "column_name":"create_dt",
-	 "column_type":"DATETIME2",
-	 "source_name":"order",
-     "source_column":"dt"
-	 },
-    {"name":"shk",
-	 "type":"anchor",
-	 "column_type":"BIGINT"
-	 },
-    {"name":"shk_order",
-	 "type":"historical_tie",
-	 "source_name":"order_detail",
-     "columns":[
-       {"type":"anchor_pk","name":"orders","source_column":"order_id"},
-       {"type":"anchor_pk","name":"shk","source_column":"shk_id"}
-     ]
-	 }
-  ]
-}		
 		
 		
