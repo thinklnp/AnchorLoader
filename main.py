@@ -17,7 +17,7 @@ def to_sql_str(a):
     elif isinstance(a, datetime.datetime):
         return "'" + a.strftime("%Y-%m-%d %H:%M:%S") + "'"
     else:
-        return a
+        return str(a)
 
 
 class AM_Object(object):
@@ -66,23 +66,22 @@ class AM_Object(object):
             curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
                          + ", ".join(["({0})".format(",".join(map(to_sql_str, v))) for v in self.data[sv:sv + 900]]))
             ##TODO What's th fuck.. where simple load?
-        if self.k:
-            curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
-                + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
-                + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
-                ).format(name=self.name,
-                    clmns=",".join([c["cl_name"] for c in self.columns]),
-                    s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
-                    m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
-                                      for c in self.columns]),
-                    nm_clmns=" ".join(["AND t.{0}<>{1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
-                                       for c in self.columns if "cl_pk" not in c]),
-                    j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref_name", "s"))
-                                          for c in self.columns if "cl_pk" in c]),
-                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_value = s.{1}_value".format(self.schema, c["cl_ref_name"])
-                                    for c in tmp_cs]),
-                    meta=str(metadata))
-                )
+        curs.execute(("SET NOCOUNT ON; MERGE {schema}.{name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
+            + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
+            + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta};" if not self.historical else ";"
+            ).format(name=self.name, schema=self.schema,
+                clmns=",".join([c["cl_name"] for c in self.columns]),
+                s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
+                m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
+                                  for c in self.columns]),
+                nm_clmns=" ".join(["AND t.{0}<>{1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
+                                   for c in self.columns if "cl_pk" not in c]),
+                j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref_name", "s"))
+                                      for c in self.columns if "cl_pk" in c]),
+                joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_value = s.{1}_value".format(self.schema, c.get("cl_ref_name","s"))
+                                for c in tmp_cs]) if self.k else "",
+                meta=str(metadata))
+            )
         curs.commit()
 
 
