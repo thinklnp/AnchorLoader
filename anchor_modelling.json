@@ -39,14 +39,7 @@
         "column_type": "INT",
         "source": "order",
         "source_column": "order_id",
-        "attributes": [
-          {
-            "name": "create_dt",
-            "column_type": "DATETIME2",
-            "historical":"false",
-            "source_column": "dt"
-          }
-        ]
+
       },
       {
         "name": "shk",
@@ -55,20 +48,30 @@
         "source_column": "shk_id"
       }
     ],
+    "attributes": [
+        {
+          "name": "create_dt",
+          "anchor": "orders",
+          "column_type": "DATETIME2",
+          "historical":"false",
+          "source":"order",
+          "source_column": "dt"
+        }
+    ],
     "ties": [
       {
         "name": "shk_order",
         "historical": "true",
-        "source_name": "order_detail",
+        "source": "order_detail",
         "columns": [
           {
             "type": "anchor_pk",
-            "name": "orders",
+            "anchor": "orders",
             "source_column": "order_id"
           },
           {
             "type": "anchor_pk",
-            "name": "shk",
+            "anchor": "shk",
             "source_column": "shk_id"
           }
         ]

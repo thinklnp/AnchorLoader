@@ -30,20 +30,19 @@ class AM_Object(object):
         self.columns = []
         self.sort_order = None
         self.historical = False
-        self.k = None
         self.dict2row = {}
 
     def create(self):
-        crsr = self.connection.cursor()
-        if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
-            crsr.execute("SET NOCOUNT ON; CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
+        create_script = ("SET NOCOUNT ON; CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
                          .format(scm=self.schema, tbl=self.name,
-                         clmns=", ".join([c["cl_name"] + " " + c["cl_type"] + " NOT NULL " +
+                         clmns=", ".join([c["cl_name"] + " " + c["cl_type"] + " NOT NULL " + "" if "src" in c else " IDENTITY(1,1) "  +
                             " REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"],c["cl_ref_name"] + "_id")
                                           if "cl_ref_name" in c else "" for c in self.columns])
                         ,cdt= ", changedDt DATETIME2 NOT NULL DEFAULT GETDATE()" if self.historical else ""
-                        ,pks=", ".join([c["cl_name"] for c in self.columns if "cl_pk" in c]) + ", changedDt DESC" if self.historical else "")
-                         )
+                        ,pks=", ".join([c["cl_name"] for c in self.columns if "cl_pk" in c]) + ", changedDt DESC" if self.historical else ""))
+        crsr = self.connection.cursor()
+        if not crsr.tables(table=self.name, schema=self.schema, catalog=self.catalog).fetchone():
+            crsr.execute(create_script)
             crsr.commit()
 
     def init_load(self, curs):
@@ -88,65 +87,39 @@ def get_am_object(obj, fl):
         def __init__(self, o, f):
             super().__init__(o, f)
             self.sort_order = 1
-            self.columns = [{"cl_name":o["name"] + "_id", "cl_type": o["column_type"], "cl_pk":0}]
-
+            self.columns = [{"cl_name":o["name"] + "_id","cl_type":"BIGINT", "cl_pk":0}
+                    ,{"cl_name":"external_id", "cl_type": o["column_type"], "src":o["source_column"]}]
         def add(self, r):
-            self.data.append(r) # Не row а значение из attribute или tie
-
-    class Knot(AM_Object):
-        def __init__(self, o, f):
-            super().__init__(o, f)
-            self.sort_order = 1
-            self.columns = [{"cl_name": o["name"] + "_id",
-                             "cl_type": o["column_id_type"],
-                             "cl_pk":0},
-                            {"cl_name":  o["name"] + "_value",
-                             "cl_type": o["column_type"]}]
-
-        def add(self, r):
-            self.data.append(r)  # Не row а значение из attribute или tie
+            self.data.append([r[self.dict2row[self.o["source_column"]]]])
 
     class Attribute(AM_Object):
         def __init__(self, o, f, hist=False):
             super().__init__(o, f)
             self.sort_order = 2
             self.historical = hist
-            self.a = [t_o for t_o in f["objects"] if t_o["type"] == "anchor" and t_o["name"] == o["anchor"]][0]
+            self.a = [t_o for t_o in f["anchors"] if t_o["name"] == o["anchor"]][0]
             self.a_obj = Anchor(self.a, f)
-            if "knot" in o:
-                self.k = [k_o for k_o in f["objects"] if k_o["type"] == "knot" and k_o["name"] == o["knot"]][0]
-                self.k_obj = Knot(self.k, f)
             self.name = self.a["name"] + "_" + o["name"]
             self.columns = [{
                                 "cl_name": self.a["name"] + "_id",
-                                "cl_type": self.a["column_type"],
+                                "cl_type": " BIGINT ",
                                 "cl_ref_name": self.a["name"],
                                 "cl_pk":0
+                            },
+                            {
+                                "cl_name": o["name"],
+                                "cl_type": o["column_type"]
                             }]
-            if self.k:
-                self.columns.append({
-                    "cl_name": self.k["name"] + "_id",
-                    "cl_type": self.k["column_id_type"],
-                    "cl_ref_name": self.k["name"],
-                    "cl_ref_type": self.k["column_type"]
-                })
-            else:
-                self.columns.append({
-                    "cl_name": o["column_name"],
-                    "cl_type": o["column_type"]
-                })
 
         def init_load(self, curs):
             super().init_load(curs)
-            if self.k: self.k_obj.init_load(curs)
             self.a_obj.init_load(curs)
 
         def add(self, r):
-            if self.k: self.k_obj.add(r[self.dict2row[self.o["source_column"]]])
+            self.a_obj.add(r)
             self.data.append([r[self.dict2row[self.a["source_column"]]], r[self.dict2row[self.o["source_column"]]]])
 
         def commit_load(self, metadata):
-            if self.k: self.k_obj.commit_load(metadata)
             self.a_obj.commit_load(metadata)
             super().commit_load(metadata)
 
@@ -157,48 +130,38 @@ def get_am_object(obj, fl):
             self.sort_order = 2
             self.historical = hist
             self.name = o["name"]
-            cr = {"anchor_pk": "anchor", "anchor": "anchor", "knot": "knot", "knot_pk": "knot"}
             pk_i = 0
-            self.k_objs = []
             for c in o["columns"]:
-                a = [x for x in f["objects"] if x["type"] == cr[c["type"]] and x["name"] == c["name"]][0]
+                a = [x for x in f["anchors"] if x["name"] == c["name"]][0]
                 cols = {
-                        "cl_name": c["name"] + "_id",
-                        "cl_type": a["column_type"],
-                        "cl_ref_name": a["name"],
-                        "cl_ref_type": a["column_type"]
+                        "cl_name": c["anchor"] + "_id",
+                        "cl_type": " BIGINT ",
+                        "cl_ref_name": a["name"]
                     }
-                if c["type"] in ["anchor_pk", "knot_pk"]:
+                if c["type"] in ["anchor_pk"]:
                     cols.update({"cl_pk": pk_i})
                     pk_i += 1
-                if c["type"] in ["knot","knot_pk"]:
-                    cols.update({"k_obj": Knot([x for x in f["objects"] if x["type"] == "knot" and x["name"] == c["name"]][0],f),
-                                 "k_source_column": c["source_column"]})
                 if c["type"] in ["anchor","anchor_pk"]:
-                    cols.update({"a_obj": Anchor([x for x in f["objects"] if x["type"] == "anchor" and x["name"] == c["name"]][0],f),
+                    cols.update({"a_obj": Anchor([x for x in f["anchors"] if x["name"] == c["name"]][0],f),
                                  "a_source_column": c["source_column"]})
                 self.columns.append(cols)
 
         def init_load(self, curs):
             super().init_load(curs)
             for c in self.columns:
-                if "k_obj" in c: c["k_obj"].init_load(curs)
                 if "a_obj" in c: c["a_obj"].init_load(curs)
 
         def add(self, r):
             self.data.append([r[self.dict2row[c["source_column"]]] for c in self.o["columns"]])
             for c in self.columns:
-                if "k_obj" in c: c["k_obj"].add([r[self.dict2row[c["k_source_column"]]]])
-                if "a_obj" in c: c["a_obj"].add([r[self.dict2row[c["a_source_column"]]]])
+                if "a_obj" in c: c["a_obj"].add(r)
 
         def commit_load(self, metadata):
             for c in self.columns:
-                if "k_obj" in c: c["k_obj"].commit_load(metadata)
                 if "a_obj" in c: c["a_obj"].commit_load(metadata)
             super().commit_load(metadata)
 
     if obj["type"] == "anchor": return Anchor(obj, fl)
-    if obj["type"] == "knot": return Knot(obj, fl)
     if obj["type"] == "tie": return Tie(obj, fl)
     if obj["type"] == "attribute": return Attribute(obj, fl)
     if obj["type"] == "historical_attribute": return Attribute(obj, fl, True)
@@ -214,10 +177,9 @@ class Source(object):
         self.schema = f["connections"]["anchor_connection"]["schema"]
         self.source_columns = set()
         self.target_objects = []
-        for o in [fo for fo in f["objects"] if fo["source_name"] == s["name"]]:
+        for o in [fo for fo in f["anchors"] + f["attributes"] + f["ties"] if fo["source"] == s["name"]]:
             for c in o.get("columns",[o]):
                 self.source_columns.add(c["source_column"])
-            self.source_columns.add(o["source_column"])
             self.target_objects.append(get_am_object(o, f))
         self.target_objects.sort(key=lambda x: x.sort_order)
 
@@ -228,17 +190,15 @@ class Source(object):
         return rows[0] if rows[0] else 0
 
     def load_source(self, met_id):
-        curs = self.connection.cursor()
-        curs.execute(
-            "SELECT TOP {cnt} {clmns} FROM {src} WHERE {d_field} > CAST({m_rv} AS BINARY(8)) ORDER BY {d_field} "
+        select_script = ("SELECT TOP {cnt} {clmns} FROM {src} WHERE {d_field} > CAST({m_rv} AS BINARY(8)) ORDER BY {d_field} "
                 .format(cnt=10000, clmns=", ".join([c for c in self.source_columns]), src=self.s["source_table"], m_rv=self.get_rv(), d_field=self.s["delta_field"]))
+        curs = self.connection.cursor()
+        curs.execute(select_script)
         for x in self.target_objects:
             x.init_load()
-  #      map(lambda x: x.init_load(), self.target_objects)
         for r in curs:
             for x in self.target_objects:
                 x.add(r)
-  #          map(lambda x: x.add(r), self.target_objects)
         ao, bo = [], []
         for t in self.target_objects:
             if t.sort_order == 1:
@@ -249,8 +209,6 @@ class Source(object):
             x.commit_load(met_id)
         for x in bo:
             x.commit_load(met_id)
-   #     map(lambda x: x.commit_load(met_id), ao)
-   #     map(lambda x: x.commit_load(met_id), bo)
 
 
 def create_table(conn, t):
