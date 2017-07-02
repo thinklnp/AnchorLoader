@@ -35,9 +35,12 @@ class AM_Object(object):
     def create(self):
         create_script = ("SET NOCOUNT ON; CREATE TABLE {scm}.{tbl} ({clmns}, met_id INT NOT NULL {cdt} ,PRIMARY KEY ({pks}))"
                          .format(scm=self.schema, tbl=self.name,
-                         clmns=", ".join([c["cl_name"] + " " + c["cl_type"] + " NOT NULL " + "" if "src" in c else " IDENTITY(1,1) "  +
-                            " REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"],c["cl_ref_name"] + "_id")
-                                          if "cl_ref_name" in c else "" for c in self.columns])
+                         clmns=", ".join(["{0} {1} NOT NULL {2}".format(
+                                            c["cl_name"]
+                                            ,"BIGINT" if "cl_ref_name" in c else c["cl_type"]
+                                            ," REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"], c["cl_ref_name"] + "_id")
+                                                if "cl_ref_name" in c else " IDENTITY(1,1) " if "src" not in c else ""
+                                    ) for c in self.columns])
                         ,cdt= ", changedDt DATETIME2 NOT NULL DEFAULT GETDATE()" if self.historical else ""
                         ,pks=", ".join([c["cl_name"] for c in self.columns if "cl_pk" in c]) + ", changedDt DESC" if self.historical else ""))
         crsr = self.connection.cursor()
@@ -56,6 +59,7 @@ class AM_Object(object):
         tmp_cs = [{"cl_name": c["cl_ref_name"] + "_value" if "cl_ref_name" in c else c["cl_name"],
                    "cl_type": c["cl_ref_type"] if "cl_ref_type" in c else c["cl_type"]} for c in self.columns]
         curs = self.connection.cursor()
+        ##Refack here!!
         curs.execure(
             "CREATE TABLE  #tmp_{0} ({1})".format(self.name, ",".join(["{0} {1}".format(c["cl_name"],c["cl_type"])
                                                                        for c in tmp_cs])))
@@ -67,7 +71,7 @@ class AM_Object(object):
                 + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
                 + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
                 ).format(name=self.name,
-                    clmns=",".join([c["cl_name"] for c in self.columns]),
+                    clmns=",".join([c["cl_name"] for c in self.columns if "cl_ref_name" in c or "src" in c]),
                     s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
                     m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
                                       for c in self.columns]),
@@ -75,7 +79,7 @@ class AM_Object(object):
                                        for c in self.columns if "cl_pk" not in c]),
                     j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref_name", "s"))
                                           for c in self.columns if "cl_pk" in c]),
-                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_value = s.{1}_value".format(self.schema, c["cl_ref_name"])
+                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema, c["cl_ref_name"])
                                     for c in tmp_cs]),
                     meta=str(metadata))
                 )
@@ -87,8 +91,15 @@ def get_am_object(obj, fl):
         def __init__(self, o, f):
             super().__init__(o, f)
             self.sort_order = 1
-            self.columns = [{"cl_name":o["name"] + "_id","cl_type":"BIGINT", "cl_pk":0}
-                    ,{"cl_name":"external_id", "cl_type": o["column_type"], "src":o["source_column"]}]
+            self.columns = [{
+                                "cl_name":o["name"] + "_id",
+                                "cl_type":"BIGINT", "cl_pk":0
+                            },
+                            {
+                                "cl_name":"external_id",
+                                "cl_type": o["column_type"],
+                                "src":o["source_column"]
+                            }]
         def add(self, r):
             self.data.append([r[self.dict2row[self.o["source_column"]]]])
 
@@ -102,13 +113,13 @@ def get_am_object(obj, fl):
             self.name = self.a["name"] + "_" + o["name"]
             self.columns = [{
                                 "cl_name": self.a["name"] + "_id",
-                                "cl_type": " BIGINT ",
                                 "cl_ref_name": self.a["name"],
                                 "cl_pk":0
                             },
                             {
                                 "cl_name": o["name"],
-                                "cl_type": o["column_type"]
+                                "cl_type": o["column_type"],
+                                "src":o["source_column"]
                             }]
 
         def init_load(self, curs):
@@ -134,16 +145,13 @@ def get_am_object(obj, fl):
             for c in o["columns"]:
                 a = [x for x in f["anchors"] if x["name"] == c["name"]][0]
                 cols = {
-                        "cl_name": c["anchor"] + "_id",
-                        "cl_type": " BIGINT ",
-                        "cl_ref_name": a["name"]
+                        "cl_name": a["name"] + "_id",
+                        "cl_ref_name": a["name"],
+                        "a_obj": Anchor([x for x in f["anchors"] if x["name"] == c["name"]][0], f)
                     }
                 if c["type"] in ["anchor_pk"]:
                     cols.update({"cl_pk": pk_i})
                     pk_i += 1
-                if c["type"] in ["anchor","anchor_pk"]:
-                    cols.update({"a_obj": Anchor([x for x in f["anchors"] if x["name"] == c["name"]][0],f),
-                                 "a_source_column": c["source_column"]})
                 self.columns.append(cols)
 
         def init_load(self, curs):
