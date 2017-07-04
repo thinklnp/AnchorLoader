@@ -37,9 +37,9 @@ class AM_Object(object):
                          .format(scm=self.schema, tbl=self.name,
                          clmns=", ".join(["{0} {1} NOT NULL {2}".format(
                                             c["cl_name"]
-                                            ,"BIGINT" if "cl_ref_name" in c else c["cl_type"]
-                                            ," REFERENCES {0}({1})".format(self.schema + "." + c["cl_ref_name"], c["cl_ref_name"] + "_id")
-                                                if "cl_ref_name" in c else " IDENTITY(1,1) " if "src" not in c else ""
+                                            ,"BIGINT" if "a_obj" in c else c["cl_type"]
+                                            ," REFERENCES {0}({1})".format(self.schema + "." + c["a_obj"].name, c["a_obj"].name + "_id")
+                                                if "a_obj" in c else " IDENTITY(1,1) " if "src" not in c else ""
                                     ) for c in self.columns])
                         ,cdt= ", changedDt DATETIME2 NOT NULL DEFAULT GETDATE()" if self.historical else ""
                         ,pks=", ".join([c["cl_name"] for c in self.columns if "cl_pk" in c]) + ", changedDt DESC" if self.historical else ""))
@@ -56,8 +56,10 @@ class AM_Object(object):
         pass
 
     def commit_load(self, metadata):
-        tmp_cs = [{"cl_name": c["cl_ref_name"] + "_value" if "cl_ref_name" in c else c["cl_name"],
-                   "cl_type": c["cl_ref_type"] if "cl_ref_type" in c else c["cl_type"]} for c in self.columns]
+        tmp_cs = [{"cl_name": c["a_obj"].name if "a_obj" in c else c["src"],
+                   "cl_type": c["a_obj"].o["column_type"] if "a_obj" in c else c["cl_type"],
+                   "cl_a": c["a_obj"] if "a_obj" in c else "",
+                   "cl_target": "XXX"} for c in self.columns if "a_obj" in c or "src" in c]
         curs = self.connection.cursor()
         ##Refack here!!
         curs.execure(
@@ -66,21 +68,33 @@ class AM_Object(object):
         for sv in range(0, len(self.data), 900):
             curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
                          + ", ".join(["({0})".format(",".join(to_sql_str(v))) for v in self.data[sv:sv + 900]]))
-        if self.k:
-            curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
+
+
+##refack!!!
+        merge_script = ("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
                 + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
                 + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
                 ).format(name=self.name,
-                    clmns=",".join([c["cl_name"] for c in self.columns if "cl_ref_name" in c or "src" in c]),
+                         clmns=", ".join([c["cl_name"] for c in tmp_cs]),
+                         joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema,c["cl_a"].name) for c in tmp_cs if c["cl_a"]])),
+                         j_clmns=" AND ".join(["t.{0} = {1}.{2}".format(c["cl_target"],c["cl_a"].name if c["cl_a"] else "s", ) for c in tmp_cs])
+
+        curs.execute(merge_script)
+
+        curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
+                + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
+                + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
+                ).format(name=self.name,
+                    clmns=",".join([c["cl_name"] for c in tmp_cs]),
                     s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
                     m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
                                       for c in self.columns]),
                     nm_clmns=" ".join(["AND t.{0}<>{1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
                                        for c in self.columns if "cl_pk" not in c]),
-                    j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref_name", "s"))
-                                          for c in self.columns if "cl_pk" in c]),
-                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema, c["cl_ref_name"])
-                                    for c in tmp_cs]),
+                    j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref", "s"))
+                                          for c in tmp_cs]),
+                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema, c["cl_ref"])
+                                    for c in tmp_cs if c["cl_ref"]]),
                     meta=str(metadata))
                 )
         curs.commit()
@@ -109,11 +123,10 @@ def get_am_object(obj, fl):
             self.sort_order = 2
             self.historical = hist
             self.a = [t_o for t_o in f["anchors"] if t_o["name"] == o["anchor"]][0]
-            self.a_obj = Anchor(self.a, f)
             self.name = self.a["name"] + "_" + o["name"]
             self.columns = [{
                                 "cl_name": self.a["name"] + "_id",
-                                "cl_ref_name": self.a["name"],
+                                "a_obj": Anchor(self.a, f),
                                 "cl_pk":0
                             },
                             {
@@ -124,14 +137,17 @@ def get_am_object(obj, fl):
 
         def init_load(self, curs):
             super().init_load(curs)
-            self.a_obj.init_load(curs)
+            for c in self.columns:
+                if "a_obj" in c: c["a_obj"].init_load(curs)
 
         def add(self, r):
-            self.a_obj.add(r)
             self.data.append([r[self.dict2row[self.a["source_column"]]], r[self.dict2row[self.o["source_column"]]]])
+            for c in self.columns:
+                if "a_obj" in c: c["a_obj"].add(r)
 
         def commit_load(self, metadata):
-            self.a_obj.commit_load(metadata)
+            for c in self.columns:
+                if "a_obj" in c: c["a_obj"].commit_load(metadata)
             super().commit_load(metadata)
 
     ##TO_DO причесать Tie не забыть про удаление... Хотя может сейчас и забыть.
@@ -146,7 +162,6 @@ def get_am_object(obj, fl):
                 a = [x for x in f["anchors"] if x["name"] == c["name"]][0]
                 cols = {
                         "cl_name": a["name"] + "_id",
-                        "cl_ref_name": a["name"],
                         "a_obj": Anchor([x for x in f["anchors"] if x["name"] == c["name"]][0], f)
                     }
                 if c["type"] in ["anchor_pk"]:
