@@ -56,47 +56,65 @@ class AM_Object(object):
         pass
 
     def commit_load(self, metadata):
-        tmp_cs = [{"cl_name": c["a_obj"].name if "a_obj" in c else c["src"],
-                   "cl_type": c["a_obj"].o["column_type"] if "a_obj" in c else c["cl_type"],
-                   "cl_a": c["a_obj"] if "a_obj" in c else "",
-                   "cl_target": "XXX"} for c in self.columns if "a_obj" in c or "src" in c]
+        tmp_cs = [{"cl_a_name": c["a_obj"].name,
+                   "sl_type":c["a_obj"].o["column_type"]
+                   } for c in self.columns if "a_obj" in c]
+        tmp_cs += [{"cl_name": c["src"],
+                    "cl_type": c["cl_type"]} for c in self.columns if "src" in c]
         curs = self.connection.cursor()
         ##Refack here!!
         curs.execure(
-            "CREATE TABLE  #tmp_{0} ({1})".format(self.name, ",".join(["{0} {1}".format(c["cl_name"],c["cl_type"])
-                                                                       for c in tmp_cs])))
+            "CREATE TABLE  #tmp_{0} ({1})".format(self.name, ",".join(["{0} {1}".format(c["cl_name"] if "src" in c else c["a_obj"].name
+                                                                                        , c["cl_type"] if "src" in c else c["a_obj"].o["column_type"])
+                                                                       for c in self.columns if "src" in c or "a_obj" in c])))
         for sv in range(0, len(self.data), 900):
             curs.execute("INSERT INTO #tmp_{0} VALUES ".format(self.name)
                          + ", ".join(["({0})".format(",".join(to_sql_str(v))) for v in self.data[sv:sv + 900]]))
 
-
 ##refack!!!
         merge_script = ("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
-                + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
+                + " WHEN NOT MATCHED THEN INSERT({ins_clmns},met_id) VALUES({s_clmns},{meta})"
                 + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
                 ).format(name=self.name,
-                         clmns=", ".join([c["cl_name"] for c in tmp_cs]),
-                         joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema,c["cl_a"].name) for c in tmp_cs if c["cl_a"]])),
-                         j_clmns=" AND ".join(["t.{0} = {1}.{2}".format(c["cl_target"],c["cl_a"].name if c["cl_a"] else "s", ) for c in tmp_cs])
+                         clmns=", ".join([c["cl_name"] if "src" in c else c["a_obj"].name for c in self.columns if "src" in c or "a_obj" in c]),
+                         joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_ex = s.{1}".format(self.schema, c["a_obj"].name) for c in self.columns if "a_obj" in c]),
+                         j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["a_obj"].name + "_id", c["a_obj"].name) for c in self.columns if "a_obj" in c and "cl_pk" in c]),
+                         ins_clmns=", ".join([c["cl_name"] for c in self.columns if "src" in c or "a_obj" in c]),
+                         s_clmns=", ".join(["{0}.{1}".format(c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
+                                            for c in self.columns if "src" in c or "a_obj" in c]),
+                         nm_clmns=" AND ".join(["{0}<>{1}.{2}".format(c["cl_name"],c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
+                                                for c in self.columns if "a_obj" in c and "cl_pk" not in c]),
+                         m_clmns=", ".join(["{0}={1}.{2}".format(c["cl_name"],c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
+                                                for c in self.columns if "a_obj" in c and "cl_pk" not in c]),
+                         meta=str(metadata)
+                )
+        # test_script = "SET NOCOUNT ON; MERGE anchor t USING (SELECT DISTINCT order_id FROM #tmp_anchor) s ON t.external_id = s.order_id "\
+        #          " WHEN NOT MATCHED THEN INSERT(external_id,met_id) VALUES(s.order_id,{meta})"
+        # test_script_attr = "SET NOCOUNT ON; MERGE atribute t USING (SELECT DISTINCT order_id, attr FROM #tmp_attribute) s JOIN anchor anchor ON anchor_ex = s.order_id ON t.anchor_id = anchor.anchor_id "\
+        #          " WHEN NOT MATCHED THEN INSERT(anchor_id,attr,met_id) VALUES(anchor.anchor_id,s.attr,{meta})"\
+        #          " WHEN MATCHED AND attr <> s.attr THEN UPDATE SET attr = s.attr, met_id={meta}}" if not self.historical else ""
+        # test_script_tie = "SET NOCOUNT ON; MERGE tie t USING (SELECT DISTINCT {anchor_ex_id} FROM #tmp_tie) s {JOIN anchor anchor ON anchor.external_id = s.anchor_ex_id} ON {t.anchor_id = anchor.anchor_id} "\
+        #          " WHEN NOT MATCHED THEN INSERT({anchor_id},met_id) VALUES({anchor.anchor_id},{meta})"\
+        #          " WHEN MATCHED AND {anchor_id <> anchor.anchor_id} THEN UPDATE SET {anchor_id = anchor.anchor_id}, met_id={meta}}" if not self.historical else ""
 
         curs.execute(merge_script)
 
-        curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
-                + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
-                + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
-                ).format(name=self.name,
-                    clmns=",".join([c["cl_name"] for c in tmp_cs]),
-                    s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
-                    m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
-                                      for c in self.columns]),
-                    nm_clmns=" ".join(["AND t.{0}<>{1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
-                                       for c in self.columns if "cl_pk" not in c]),
-                    j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref", "s"))
-                                          for c in tmp_cs]),
-                    joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema, c["cl_ref"])
-                                    for c in tmp_cs if c["cl_ref"]]),
-                    meta=str(metadata))
-                )
+        # curs.execute(("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
+        #         + " WHEN NOT MATCHED THEN INSERT({clmns},met_id) VALUES({s_clmns},{meta})"
+        #         + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}}" if not self.historical else ""
+        #         ).format(name=self.name,
+        #             clmns=",".join([c["cl_name"] for c in tmp_cs]),
+        #             s_clmns=",".join(["{0}.{1}".format(c.get("cl_ref_name","s"),c["cl_name"]) for c in self.columns]),
+        #             m_clmns=",".join(["{0}={1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
+        #                               for c in self.columns]),
+        #             nm_clmns=" ".join(["AND t.{0}<>{1}.{0}".format(c["cl_name"],c.get("cl_ref_name","s"))
+        #                                for c in self.columns if "cl_pk" not in c]),
+        #             j_clmns=" AND ".join(["t.{0} = {1}.{0}".format(c["cl_name"], c.get("cl_ref", "s"))
+        #                                   for c in tmp_cs]),
+        #             joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_id = s.{1}_id".format(self.schema, c["cl_ref"])
+        #                             for c in tmp_cs if c["cl_ref"]]),
+        #             meta=str(metadata))
+        #         )
         curs.commit()
 
 
@@ -110,7 +128,7 @@ def get_am_object(obj, fl):
                                 "cl_type":"BIGINT", "cl_pk":0
                             },
                             {
-                                "cl_name":"external_id",
+                                "cl_name": self.o["name"] + "_ex",
                                 "cl_type": o["column_type"],
                                 "src":o["source_column"]
                             }]
