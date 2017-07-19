@@ -32,52 +32,49 @@
       "parallel_field": "rid"
     }
   ],
-  "objects": {
-    "anchors": [
+  "anchors": [
+    {
+      "name": "order",
+      "column_type": "INT",
+      "source": "order",
+      "source_column": "order_id"
+    },
+    {
+      "name": "shk",
+      "column_type": "BIGINT",
+      "source": "shk",
+      "source_column": "shk_id"
+    }
+  ],
+  "attributes": [
       {
-        "name": "orders",
-        "column_type": "INT",
-        "source": "order",
-        "source_column": "order_id",
-
-      },
-      {
-        "name": "shk",
-        "column_type": "BIGINT",
-        "source": "shk",
-        "source_column": "shk_id"
+        "name": "create_dt",
+        "anchor": "order",
+        "column_type": "DATETIME2",
+        "historical": false,
+        "source":"order",
+        "source_column": "dt"
       }
-    ],
-    "attributes": [
+  ],
+  "ties": [
+    {
+      "name": "shk_order",
+      "historical": true,
+      "source": "order_detail",
+      "columns": [
         {
-          "name": "create_dt",
-          "anchor": "orders",
-          "column_type": "DATETIME2",
-          "historical":"false",
-          "source":"order",
-          "source_column": "dt"
+          "type": "anchor_pk",
+          "anchor": "order",
+          "source_column": "order_id"
+        },
+        {
+          "type": "anchor_pk",
+          "anchor": "shk",
+          "source_column": "shk_id"
         }
-    ],
-    "ties": [
-      {
-        "name": "shk_order",
-        "historical": "true",
-        "source": "order_detail",
-        "columns": [
-          {
-            "type": "anchor_pk",
-            "anchor": "orders",
-            "source_column": "order_id"
-          },
-          {
-            "type": "anchor_pk",
-            "anchor": "shk",
-            "source_column": "shk_id"
-          }
-        ]
-      }
-    ]
-  }
+      ]
+    }
+  ]
 }
 
 		
