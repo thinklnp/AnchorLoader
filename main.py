@@ -32,6 +32,7 @@ class AM_Object(object):
         self.columns = []
         self.sort_order = None
         self.historical = False
+        self.updateable = False
         self.dict2row = {}
 
     def create(self):
@@ -76,11 +77,11 @@ class AM_Object(object):
 ##refack!!!
         merge_script = ("SET NOCOUNT ON; MERGE {name} t USING (SELECT DISTINCT {clmns} FROM #tmp_{name}) s {joins} ON {j_clmns} "
                 + " WHEN NOT MATCHED THEN INSERT({ins_clmns},met_id) VALUES({s_clmns},{meta})"
-                + " WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}" if not self.historical else ""
+                + (" WHEN MATCHED {nm_clmns} THEN UPDATE SET {m_clmns}, met_id={meta}" if self.updateable  else "") + ";"
                 ).format(name=self.name,
                          clmns=", ".join([c["cl_name"] if "src" in c else c["a_obj"].name for c in self.columns if "src" in c or "a_obj" in c]),
                          joins=" ".join([" JOIN {0}.{1} {1} ON {1}.{1}_ex = s.{1}".format(self.schema, c["a_obj"].name) for c in self.columns if "a_obj" in c]),
-                         j_clmns=" AND ".join(["t.{0} = {1}.{0}".format((c["a_obj"].name + "_id") if "a_obj" in c else c["..."],
+                         j_clmns=" AND ".join(["t.{0} = {1}.{0}".format((c["a_obj"].name + "_id") if "a_obj" in c else (self.o["name"] + "_ex"),
                                                                         c["a_obj"].name if "a_obj" in c else "s") for c in self.columns if "cl_pk" in c]),
                          ins_clmns=", ".join([c["cl_name"] for c in self.columns if "src" in c or "a_obj" in c]),
                          s_clmns=", ".join(["{0}.{1}".format(c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
@@ -88,7 +89,7 @@ class AM_Object(object):
                          nm_clmns=" AND ".join(["{0}<>{1}.{2}".format(c["cl_name"],c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
                                                 for c in self.columns if "a_obj" in c and "cl_pk" not in c]),
                          m_clmns=", ".join(["{0}={1}.{2}".format(c["cl_name"],c["a_obj"].name if "a_obj" in c else "s", c["a_obj"].name + "_id" if "a_obj" in c else c["cl_name"])
-                                                for c in self.columns if "a_obj" in c and "cl_pk" not in c]),
+                                                for c in self.columns if "a_obj" in c]),
                          meta=str(metadata)
                 )
         # test_script = "SET NOCOUNT ON; MERGE anchor t USING (SELECT DISTINCT order_id FROM #tmp_anchor) s ON t.external_id = s.order_id "\
@@ -131,7 +132,7 @@ class Anchor(AM_Object):
                             "cl_pk":0
                         },
                         {
-                            "cl_name": self.o["name"] + "_ex",
+                            "cl_name": o["name"] + "_ex",
                             "cl_type": o["column_type"],
                             "src":o["source_column"]
                         }]
@@ -143,6 +144,7 @@ class Attribute(AM_Object):
         super().__init__(o, f)
         self.sort_order = 2
         self.historical =  o.get("historical", False)
+        self.updateable = not self.historical
         self.a = [t_o for t_o in f["anchors"] if t_o["name"] == o["anchor"]][0]
         self.name = self.a["name"] + "_" + o["name"]
         self.columns = [{
@@ -177,6 +179,7 @@ class Tie(AM_Object):
         super().__init__(o, f)
         self.sort_order = 2
         self.historical = o.get("historical", False)
+        self.updateable = not self.historical
         self.name = o["name"]
         pk_i = 0
         for c in o["columns"]:
